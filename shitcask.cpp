@@ -33,6 +33,9 @@ Shitcask::Shitcask(std::string database_name)
 }
 
 void Shitcask::set(std::string key, std::string value) {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
   off_t next_offset = get_next_offset();
   Record record{.key = std::move(key), .value = std::move(value)};
 
@@ -51,6 +54,10 @@ void Shitcask::set(std::string key, std::string value) {
 }
 
 std::string Shitcask::get(std::string key) {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
   const auto itr = offsets_.find(key);
   if (itr == offsets_.end()) {
     return "";
@@ -68,6 +75,10 @@ std::string Shitcask::get(std::string key) {
 }
 
 Record Shitcask::read_record_at_offset(const off_t offset) {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
   byte_t sizes[2];
   read_at_pos(fd_read_, sizes, NUM_BYTES_KEY_SIZE + NUM_BYTES_VALUE_SIZE,
               offset);
@@ -90,9 +101,20 @@ Record Shitcask::read_record_at_offset(const off_t offset) {
 }
 
 std::string Shitcask::database_filename() { return database_name_ + ".db"; }
-off_t Shitcask::get_next_offset() { return lseek(fd_tail_, 0, SEEK_END); }
+
+off_t Shitcask::get_next_offset() {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
+  return lseek(fd_tail_, 0, SEEK_END);
+}
 
 void Shitcask::load_all_records() {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
   byte_t key_sz_bytes;
   size_t key_sz;
   size_t curr_key_offset = 0;
@@ -113,9 +135,19 @@ void Shitcask::load_all_records() {
   }
 }
 
-Shitcask::~Shitcask() {
-  if (fd_tail_ > 0)
+bool Shitcask::is_fd_valid(int fd) {
+  return fcntl(fd, F_GETFD) != -1 || errno != EBADF;
+}
+
+bool Shitcask::is_connected() {
+  return is_fd_valid(fd_tail_) && is_fd_valid(fd_read_);
+}
+
+void Shitcask::close_connection() {
+  if (is_fd_valid(fd_tail_))
     close(fd_tail_);
-  if (fd_read_ > 0)
+  if (is_fd_valid(fd_read_))
     close(fd_read_);
 }
+
+Shitcask::~Shitcask() { close_connection(); }
