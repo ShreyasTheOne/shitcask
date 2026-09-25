@@ -120,7 +120,6 @@ void Shitcask::load_all_records() {
   size_t curr_key_offset = 0;
   while (true) {
     curr_key_offset = safe_lseek(fd_read_, 0, SEEK_CUR);
-    std::cout << "Current offset: " << curr_key_offset << " ";
     const size_t bytes_read =
         safe_read(fd_read_, &key_sz_bytes, NUM_BYTES_KEY_SIZE);
 
@@ -129,14 +128,12 @@ void Shitcask::load_all_records() {
     }
 
     const Record record = read_record_at_offset(curr_key_offset);
-    std::cout << " key: " << record.key << "\n";
-
     offsets_[record.key] = curr_key_offset;
   }
 }
 
 bool Shitcask::is_fd_valid(int fd) {
-  return fcntl(fd, F_GETFD) != -1 || errno != EBADF;
+  return fd > 0; //  fcntl(fd, F_GETFD) != -1 || errno != EBADF;
 }
 
 bool Shitcask::is_connected() {
@@ -144,6 +141,7 @@ bool Shitcask::is_connected() {
 }
 
 void Shitcask::close_connection() {
+  std::cout << "Closing connection to db " << database_name_ << "\n";
   if (is_fd_valid(fd_tail_))
     close(fd_tail_);
   if (is_fd_valid(fd_read_))

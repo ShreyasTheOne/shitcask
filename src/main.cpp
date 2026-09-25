@@ -1,11 +1,7 @@
-#include "shitcask.h"
+#include "io_loop.h"
 #include <iostream>
 
 int main() {
-  Shitcask store{"hello"};
-
-  // store.set("key", "value");
-  std::string value = store.get("key");
-
-  std::cout << "Retrieved value " << value << "\n";
+  IOLoop io_loop;
+  io_loop.run();
 }
