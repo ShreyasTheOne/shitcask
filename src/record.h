@@ -1,17 +1,11 @@
 #pragma once
 
 #include <cstddef>
-#include <string>
+#include <cstdint>
 
-#include "types.h"
-
-struct Record {
-  std::string key;
-  std::string value;
-
-  size_t size() const;
-  void fill(byte_t *buf) const;
+struct Header {
+  uint8_t key_size;
+  uint8_t val_size;
 };
 
-constexpr size_t NUM_BYTES_KEY_SIZE = 1;
-constexpr size_t NUM_BYTES_VALUE_SIZE = 1;
+constexpr std::size_t HeaderSize = sizeof(Header);

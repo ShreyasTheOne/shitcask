@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -7,49 +8,71 @@
 
 #include "file.h"
 #include "record.h"
-#include "shitcask.h"
+#include <shitcask/shitcask.h>
 
-Shitcask::Shitcask(std::string database_name)
-    : database_name_(std::move(database_name)) {
+Shitcask::Shitcask(std::string database_name) : database_name_(std::move(database_name)) {
   fd_tail_ = open(database_filename().c_str(), O_RDWR | O_CREAT, 0700);
   if (fd_tail_ == -1) {
-    throw std::runtime_error("Failed to open file " + database_filename() +
-                             " in rdwr mode.");
+    throw std::runtime_error("Failed to open file " + database_filename() + " in rdwr mode.");
   }
 
   const auto ret = lseek(fd_tail_, 0, SEEK_END);
   if (ret == -1) {
-    throw std::runtime_error("Failed to seek to end of database file " +
-                             database_filename());
+    throw std::runtime_error("Failed to seek to end of database file " + database_filename());
   }
 
   fd_read_ = open(database_filename().c_str(), O_RDONLY);
   if (fd_read_ == -1) {
-    throw std::runtime_error("Failed to open file " + database_filename() +
-                             " in rdonly mode.");
+    throw std::runtime_error("Failed to open file " + database_filename() + " in rdonly mode.");
   }
 
   load_all_records();
 }
 
-void Shitcask::set(std::string key, std::string value) {
+void Shitcask::load_all_records() {
   if (!is_connected()) {
     throw NoDatabaseConnection("No open database connection");
   }
-  off_t next_offset = get_next_offset();
-  Record record{.key = std::move(key), .value = std::move(value)};
 
-  // Build a single buffer with entire record
-  const size_t buf_size = record.size();
-  byte_t *buf = new byte_t[buf_size];
-  record.fill(buf);
+  size_t bytes_read;
+  alignas(Header) byte_t header_buffer[HeaderSize];
+  size_t current_header_offset = 0;
+
+  while (true) {
+    current_header_offset = safe_lseek(fd_read_, 0, SEEK_CUR);
+    if (bytes_read = safe_read(fd_read_, header_buffer, HeaderSize); bytes_read == 0) {
+      break;
+    }
+
+    Header header = std::bit_cast<Header>(header_buffer);
+    const std::string key = read_string(fd_read_, header.key_size);
+    const std::string val = read_string(fd_read_, header.val_size);
+    offsets_[key] = current_header_offset;
+  }
+}
+
+// Actions
+
+void Shitcask::set(std::string key, std::string val) {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
+  Header header{static_cast<uint8_t>(key.size()), static_cast<uint8_t>(val.size())};
+  const size_t buffer_size = HeaderSize + header.key_size + header.val_size;
+  byte_t *buffer = new byte_t[buffer_size];
+
+  // Capture header
+  std::memcpy(buffer, &header, HeaderSize);
+  std::memcpy(buffer + HeaderSize, key.c_str(), header.key_size);
+  std::memcpy(buffer + HeaderSize + header.key_size, val.c_str(), header.val_size);
 
   try {
-    safe_write(fd_tail_, buf, buf_size);
-    offsets_[record.key] = next_offset;
+    off_t next_offset = get_next_offset();
+    safe_write(fd_tail_, buffer, buffer_size);
+    offsets_[key] = next_offset;
   } catch (const std::runtime_error &e) {
-    std::cerr << "Failed to wrote key=" << key << " value=" << value << ": "
-              << e.what() << "\n";
+    std::cerr << "Failed to write key=" << key << " value=" << val << ": " << e.what() << "\n";
   }
 }
 
@@ -64,43 +87,21 @@ std::string Shitcask::get(std::string key) {
   }
 
   const off_t offset = itr->second;
-  const Record record = read_record_at_offset(offset);
+  safe_lseek(fd_read_, offset, SEEK_SET);
 
-  if (record.key != key) {
-    throw std::runtime_error("Key queried: " + key +
-                             " does not match key read: " + record.key +
-                             ". Data may be corrupted\n");
+  alignas(Header) byte_t header_buffer[HeaderSize];
+  safe_read(fd_read_, header_buffer, HeaderSize);
+  Header header = std::bit_cast<Header>(header_buffer);
+  const std::string key_stored = read_string(fd_read_, header.key_size);
+  const std::string val_stored = read_string(fd_read_, header.val_size);
+
+  if (key_stored != key) {
+    throw std::runtime_error("Key queried: " + key + " does not match key read: " + key_stored + ". Data may be corrupted\n");
   }
-  return record.value;
+  return val_stored;
 }
 
-Record Shitcask::read_record_at_offset(const off_t offset) {
-  if (!is_connected()) {
-    throw NoDatabaseConnection("No open database connection");
-  }
-
-  byte_t sizes[2];
-  read_at_pos(fd_read_, sizes, NUM_BYTES_KEY_SIZE + NUM_BYTES_VALUE_SIZE,
-              offset);
-  const size_t key_sz = sizes[0];
-  const size_t value_sz = sizes[1];
-  byte_t *key_bytes = new byte_t[key_sz + 1];
-  byte_t *value_bytes = new byte_t[value_sz + 1];
-  safe_read(fd_read_, key_bytes, key_sz);
-  safe_read(fd_read_, value_bytes, value_sz);
-  key_bytes[key_sz] = '\0';
-  value_bytes[value_sz] = '\0';
-
-  char *key_chars = new char[key_sz];
-  char *value_chars = new char[value_sz];
-
-  std::memcpy(key_chars, key_bytes, key_sz + 1);
-  std::memcpy(value_chars, value_bytes, value_sz + 1);
-
-  return Record{std::string{key_chars}, std::string{value_chars}};
-}
-
-std::string Shitcask::database_filename() { return database_name_ + ".db"; }
+// File descriptors
 
 off_t Shitcask::get_next_offset() {
   if (!is_connected()) {
@@ -110,35 +111,11 @@ off_t Shitcask::get_next_offset() {
   return lseek(fd_tail_, 0, SEEK_END);
 }
 
-void Shitcask::load_all_records() {
-  if (!is_connected()) {
-    throw NoDatabaseConnection("No open database connection");
-  }
-
-  byte_t key_sz_bytes;
-  size_t key_sz;
-  size_t curr_key_offset = 0;
-  while (true) {
-    curr_key_offset = safe_lseek(fd_read_, 0, SEEK_CUR);
-    const size_t bytes_read =
-        safe_read(fd_read_, &key_sz_bytes, NUM_BYTES_KEY_SIZE);
-
-    if (bytes_read == 0) {
-      break;
-    }
-
-    const Record record = read_record_at_offset(curr_key_offset);
-    offsets_[record.key] = curr_key_offset;
-  }
-}
-
 bool Shitcask::is_fd_valid(int fd) {
   return fd > 0; //  fcntl(fd, F_GETFD) != -1 || errno != EBADF;
 }
 
-bool Shitcask::is_connected() {
-  return is_fd_valid(fd_tail_) && is_fd_valid(fd_read_);
-}
+bool Shitcask::is_connected() { return is_fd_valid(fd_tail_) && is_fd_valid(fd_read_); }
 
 void Shitcask::close_connection() {
   std::cout << "Closing connection to db " << database_name_ << "\n";
@@ -147,5 +124,7 @@ void Shitcask::close_connection() {
   if (is_fd_valid(fd_read_))
     close(fd_read_);
 }
+
+std::string Shitcask::database_filename() { return database_name_ + ".db"; }
 
 Shitcask::~Shitcask() { close_connection(); }
