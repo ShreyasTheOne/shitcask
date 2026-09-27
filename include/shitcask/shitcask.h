@@ -24,7 +24,6 @@ private:
   bool is_fd_valid(int);
   off_t get_next_offset();
   void load_all_records();
-  Record read_record_at_offset(const off_t offset);
 
 private:
   std::string database_name_{};
@@ -37,9 +36,7 @@ private:
 class NoDatabaseConnection : public std::runtime_error {
 public:
   // Accept either std::string or const char* and forward it to the base class
-  explicit NoDatabaseConnection(const std::string &message)
-      : std::runtime_error(message) {}
+  explicit NoDatabaseConnection(const std::string &message) : std::runtime_error(message) {}
 
-  explicit NoDatabaseConnection(const char *message)
-      : std::runtime_error(message) {}
+  explicit NoDatabaseConnection(const char *message) : std::runtime_error(message) {}
 };
