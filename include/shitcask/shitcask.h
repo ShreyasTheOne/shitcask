@@ -15,6 +15,7 @@ public:
 
   void set(std::string, std::string);
   std::string get(std::string);
+  bool erase(std::string);
 
   bool is_connected();
   void close_connection();

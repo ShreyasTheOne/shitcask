@@ -46,8 +46,11 @@ void Shitcask::load_all_records() {
 
     Header header = std::bit_cast<Header>(header_buffer);
     const std::string key = read_string(fd_read_, header.key_size);
-    const std::string val = read_string(fd_read_, header.val_size);
-    offsets_[key] = current_header_offset;
+    if (header.opcode == OpCode::INSERT) {
+      offsets_[key] = current_header_offset;
+    } else if (header.opcode == OpCode::ERASE) {
+      offsets_.erase(key);
+    }
   }
 }
 
@@ -58,7 +61,10 @@ void Shitcask::set(std::string key, std::string val) {
     throw NoDatabaseConnection("No open database connection");
   }
 
-  Header header{static_cast<uint8_t>(key.size()), static_cast<uint8_t>(val.size())};
+  Header header{//
+                .opcode = OpCode::INSERT,
+                .key_size = static_cast<uint8_t>(key.size()),
+                .val_size = static_cast<uint8_t>(val.size())};
   const size_t buffer_size = HeaderSize + header.key_size + header.val_size;
   byte_t *buffer = new byte_t[buffer_size];
 
@@ -92,6 +98,11 @@ std::string Shitcask::get(std::string key) {
   alignas(Header) byte_t header_buffer[HeaderSize];
   safe_read(fd_read_, header_buffer, HeaderSize);
   Header header = std::bit_cast<Header>(header_buffer);
+
+  if (header.opcode != OpCode::INSERT) {
+    throw std::runtime_error("Key queried: " + key + " has entry marked as deleted in database");
+  }
+
   const std::string key_stored = read_string(fd_read_, header.key_size);
   const std::string val_stored = read_string(fd_read_, header.val_size);
 
@@ -99,6 +110,40 @@ std::string Shitcask::get(std::string key) {
     throw std::runtime_error("Key queried: " + key + " does not match key read: " + key_stored + ". Data may be corrupted\n");
   }
   return val_stored;
+}
+
+bool Shitcask::erase(std::string key) {
+  if (!is_connected()) {
+    throw NoDatabaseConnection("No open database connection");
+  }
+
+  const auto itr = offsets_.find(key);
+  if (itr == offsets_.end()) {
+    return false;
+  }
+
+  Header header{
+      //
+      .opcode = OpCode::ERASE,
+      .key_size = static_cast<uint8_t>(key.size()),
+  };
+
+  const size_t buffer_size = HeaderSize + header.key_size + header.val_size;
+  byte_t *buffer = new byte_t[buffer_size];
+
+  // Capture header
+  std::memcpy(buffer, &header, HeaderSize);
+  std::memcpy(buffer + HeaderSize, key.c_str(), header.key_size);
+
+  try {
+    off_t next_offset = get_next_offset();
+    safe_write(fd_tail_, buffer, buffer_size);
+    offsets_.erase(key);
+  } catch (const std::runtime_error &e) {
+    std::cerr << "Failed to erase key=" << key << ": " << e.what() << "\n";
+  }
+
+  return true;
 }
 
 // File descriptors
